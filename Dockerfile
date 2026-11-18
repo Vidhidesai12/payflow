@@ -12,6 +12,7 @@ RUN sed -i 's/\r$//' mvnw
 COPY payment-service/pom.xml payment-service/
 COPY ledger-service/pom.xml ledger-service/
 COPY fraud-service/pom.xml fraud-service/
+COPY mcp-server/pom.xml mcp-server/
 ARG SERVICE
 COPY ${SERVICE}/src ${SERVICE}/src
 # The cache mount keeps downloaded Maven dependencies between builds.

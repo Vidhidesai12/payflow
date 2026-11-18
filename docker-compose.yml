@@ -41,6 +41,22 @@ services:
       interval: 5s
       retries: 10
 
+  # mcp-server's audit log.
+  mcp-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: mcpaudit
+      POSTGRES_USER: mcpaudit
+      POSTGRES_PASSWORD: mcpaudit
+    ports:
+      - "${MCP_DB_PORT:-15434}:5432"
+    volumes:
+      - mcpdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpaudit -d mcpaudit"]
+      interval: 5s
+      retries: 10
+
   # Single Kafka broker in KRaft mode (no ZooKeeper).
   # Two listeners: localhost:9092 for apps on your machine, kafka:29092 for apps inside Docker.
   kafka:
@@ -113,6 +129,23 @@ services:
       fraud-service: { condition: service_started }
       ledger-service: { condition: service_started }
 
+  # AI clients connect here (Streamable HTTP at /mcp).
+  mcp-server:
+    profiles: [apps]
+    build:
+      context: .
+      args:
+        SERVICE: mcp-server
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://mcp-db:5432/mcpaudit
+      PAYFLOW_PAYMENTS_BASE_URL: http://payment-service:8080
+      PAYFLOW_LEDGER_BASE_URL: http://ledger-service:8081
+    depends_on:
+      mcp-db: { condition: service_healthy }
+      payment-service: { condition: service_started }
+
   # ---- metrics (profile: observability) ------------------------------------------
 
   prometheus:
@@ -141,3 +174,4 @@ volumes:
   pgdata:
   ledgerdata:
   kafkadata:
+  mcpdata:

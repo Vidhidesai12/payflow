@@ -47,3 +47,21 @@ An honest record of how AI coding tools were used on this project. Fill these in
 - Found in the live Docker run: ports 5432/5433 clashed with PostgreSQL installed on the laptop. Compose now maps the databases to 15432/15433 by default (overridable with `PAYFLOW_DB_PORT` / `LEDGER_DB_PORT`).
 - **Found by watching the Grafana dashboard (the most interesting bug):** the circuit breaker opened about 2 seconds into a normal traffic run, before any outage was simulated, and held a minute of good payments for manual review. Cause: the retry wrapped the circuit breaker, so the breaker counted every failed *attempt*, including ones the next retry fixed. After the laptop had slept overnight, a few first calls failed (stale connections or a cold container; it couldn't be reproduced on demand), retries recovered them, but 3 failed attempts out of the first 5 were enough to open the circuit. Fix: the breaker now wraps the retry, so it only counts checks that still fail after all retries. Added a regression test (half of all attempts fail, every retry succeeds, the circuit must stay closed), confirmed it fails with the old order and passes with the new one, and added a log line for every retry so the cause is visible next time. A re-run of the same traffic showed the circuit opening only for the real outage.
 - A load test right after the chaos demo "lost" 74 of 200 payments. Not a bug: the circuit breaker was still open for its 30 s window, so those payments were correctly held for manual review. Re-run with the circuit closed: 200/200 booked.
+
+## MCP server (2026-11-18)
+
+**Generated with Claude Code:** the `mcp-server` module (tools, security, audit log, tests), the payment-service service account, Docker/CI wiring, and the README section.
+
+**Design decisions to be able to explain:**
+- *No approve tool at all:* the strongest defence against prompt injection is capability. Even an AI that is fooled cannot approve a payment, because no tool exists for it and the service account has no CHECKER role.
+- *Human confirmation through elicitation:* `create_payment` asks the person to confirm amount and accounts inside their AI client. If the client cannot ask, the payment is refused (fail safe, as with the fraud check).
+- *Per-client tokens with scopes, hashed at rest:* least privilege per client; only SHA-256 hashes live in config; constant-time comparison.
+- *No token passthrough:* the server uses its own PayFlow service account and never forwards the client's token.
+- *Untrusted text labelling:* free text typed by people is cleaned (control/invisible characters removed, length capped) and returned as `untrustedText`.
+- *Own transport bean:* Spring AI's MCP starter adds no authentication. The caller's identity is captured on the HTTP request thread and passed to each tool call through the MCP transport context.
+- *Spec version:* the Java SDK in Spring AI 2.0.2 speaks MCP up to 2025-11-25, not yet the 2026-07-28 spec (stateless core, multi-round-trip elicitation). Noted as a known limit.
+
+**Bugs caught during this step:**
+- Rejecting a foreign Origin with `sendError(403)` came back as 401, because the error page itself is behind security. Fixed by writing the 403 response directly.
+- The agent limit `1000.00` in YAML was read as the float `1000.0`. Fixed by quoting it, so money stays an exact decimal.
+- A first live check failed in the test script, not the server: the server answers some calls as an event stream, which the script read incorrectly.

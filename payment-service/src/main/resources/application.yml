@@ -57,6 +57,8 @@ payflow:
       - { username: checker1, password: checker1-pass, roles: [CHECKER] }
       - { username: lead1,    password: lead1-pass,    roles: [MAKER, CHECKER] }
       - { username: auditor1, password: auditor1-pass, roles: [AUDITOR] }
+      # Service account for mcp-server (AI clients). Never CHECKER, so it can never approve.
+      - { username: mcp-agent, password: mcp-agent-pass, roles: [MAKER, AUDITOR] }
 
 management:
   endpoints:

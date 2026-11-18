@@ -17,5 +17,6 @@
         <module>payment-service</module>
         <module>ledger-service</module>
         <module>fraud-service</module>
+        <module>mcp-server</module>
     </modules>
 </project>

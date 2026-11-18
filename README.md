@@ -29,6 +29,10 @@ Everything runs locally in Docker with free tools. *Personal learning project; n
 ```mermaid
 flowchart LR
     client([Client / demo.http]) -->|REST + HTTP Basic| PS[payment-service :8080]
+    ai([AI assistant e.g. Claude]) -->|MCP, Streamable HTTP + token| MCP[mcp-server :8083]
+    MCP -->|REST as mcp-agent| PS
+    MCP -->|REST, read-only| LS
+    MCP --- ADB[(PostgreSQL<br/>audit log)]
     PS -->|REST, timeout + retry + circuit breaker| FS[fraud-service :8082]
     PS --- PDB[(PostgreSQL<br/>payments + outbox)]
     PS -->|outbox relay| K{{Kafka<br/>payments.events}}
@@ -45,6 +49,7 @@ flowchart LR
 3. **ledger-service** books it as a balanced **debit and credit**, skipping events it has already processed, and publishes `LedgerPosted` the same way.
 4. payment-service marks the payment **SETTLED**.
 5. Every night, **reconciliation** compares settled payments with ledger postings and records any mismatch.
+6. AI assistants connect through **mcp-server** (Model Context Protocol). They can read payments, the ledger and reconciliation, and create small payments after the person confirms. They can never approve.
 
 ## Screenshots
 
@@ -86,6 +91,36 @@ All captured from the running system on 2026-11-18 (how: [docs/screenshots](docs
 | | Metrics | Micrometer → `/actuator/prometheus`; optional Prometheus + Grafana dashboard |
 | Delivery | CI | GitHub Actions runs every service's tests (real PostgreSQL + Kafka via Testcontainers) and builds the Docker images |
 
+## MCP server: AI assistants, safely
+
+`mcp-server` lets an AI assistant such as Claude work with PayFlow through the [Model Context Protocol](https://modelcontextprotocol.io). It is built with Spring AI 2.0 (`@McpTool`) and serves Streamable HTTP at `/mcp`.
+
+| Tool | Scope | What it does |
+|---|---|---|
+| `get_payment`, `list_payments`, `list_held_payments` | `payments:read` | Payments, with why each is held or failed |
+| `get_ledger_posting`, `get_account_balances`, `get_trial_balance` | `ledger:read` | The double-entry ledger |
+| `get_latest_reconciliation` | `reconciliation:read` | Do payments and the ledger agree? |
+| `create_payment` | `payments:create` | Up to 1,000.00, only after the person confirms in their AI client |
+| *(no approve / reject tool)* | | Maker-checker stays with humans |
+
+Plus a resource (`payflow://docs/payment-lifecycle`) and a prompt (`investigate_held_payment`).
+
+**Safety by design**
+
+- **Least privilege:** each client has its own token (only its SHA-256 hash is stored) and scopes. The server calls PayFlow as `mcp-agent`, which has the MAKER and AUDITOR roles and never CHECKER. The client's token is never passed on.
+- **Human in the loop:** `create_payment` asks the person to confirm the exact amount and accounts through MCP elicitation. A client that can't ask is refused. Amounts over the cap are refused outright.
+- **Prompt injection:** text typed by people (such as a checker's rejection reason) is cleaned and returned as `{"untrustedText": ...}`, with a notice to treat it as data. The real defence is capability: there is no tool that approves.
+- **Audit:** every call is written to an append-only `tool_calls` table (PostgreSQL triggers block UPDATE/DELETE): client, tool, arguments, outcome, duration.
+- **Transport hygiene:** requests from browser origins that aren't allowed get 403. Errors return safe messages, never stack traces.
+
+**Connect Claude Code** (stack running, demo tokens are for local use only):
+
+```bash
+claude mcp add --transport http payflow http://127.0.0.1:8083/mcp --header "Authorization: Bearer payflow-demo-readonly"
+```
+
+Then ask, for example, *"Which PayFlow payments are held and why?"* Use `payflow-demo-operator` instead to allow `create_payment`. The server then asks you to confirm each payment; Claude Code shows this as an elicitation dialog in interactive terminal sessions. Run `/mcp` in Claude Code to check the connection.
+
 ## Run it (all free)
 
 **Prerequisites:** [Docker](https://www.docker.com/products/docker-desktop/) (Docker Desktop or Rancher Desktop) and Git. For running from source you also need **JDK 21**. About 4 GB of free memory for Docker.
@@ -119,6 +154,7 @@ docker compose --profile apps --profile observability up -d --build
 | payment-service API | http://127.0.0.1:8080/api/payments | demo users below |
 | ledger-service API | http://127.0.0.1:8081/api/ledger/trial-balance | none (internal) |
 | fraud-service API | http://127.0.0.1:8082/api/chaos | none (internal) |
+| MCP server | http://127.0.0.1:8083/mcp | Bearer `payflow-demo-readonly` or `payflow-demo-operator` |
 | Prometheus | http://127.0.0.1:9090 | none |
 | Grafana, dashboard "PayFlow overview" | http://127.0.0.1:3000 | admin / admin |
 
@@ -179,6 +215,7 @@ POST /api/reconciliation/runs (auditor1)      -> "status":"MATCHED", "mismatchCo
 | ledger | `GET /api/ledger/postings/{paymentId}`, `GET /api/ledger/postings?from=&to=` | internal |
 | ledger | `GET /api/ledger/accounts/{account}/balances`, `GET /api/ledger/trial-balance` | internal |
 | fraud | `POST /api/fraud-checks`, `PUT /api/chaos` `{failureRate, delayMs}` | internal |
+| mcp | `POST /mcp` (MCP, Streamable HTTP) | Bearer token with scopes |
 
 Errors are RFC 9457 problem-detail JSON.
 
@@ -188,13 +225,14 @@ Errors are RFC 9457 problem-detail JSON.
 ./mvnw verify            # all services
 ```
 
-71 tests, all run on every push by GitHub Actions. Integration tests start **real PostgreSQL 17 and Kafka 4.2 in Docker** (Testcontainers); external HTTP services are replaced by small stub servers so failures can be staged.
+93 tests, all run on every push by GitHub Actions. Integration tests start **real PostgreSQL 17 and Kafka 4.2 in Docker** (Testcontainers); external HTTP services are replaced by small stub servers so failures can be staged.
 
 | Service | Tests | Highlights |
 |---|---|---|
 | payment-service | 53 | 20 simultaneous same-key requests create exactly 1 payment; roles and four-eyes rule; retries, timeout and circuit breaker against a failing fraud stub (plus a regression test that blips fixed by a retry never open the circuit); outbox publishing; settlement from Kafka; duplicate and poison events; every reconciliation mismatch type |
 | ledger-service | 13 | Balanced debit/credit per payment; duplicate deliveries booked once; dead-letter topic; database refuses an unbalanced posting; ledger rows can't be updated or deleted |
 | fraud-service | 5 | Allow / review / deny rules, validation, chaos mode |
+| mcp-server | 22 | Driven by the official MCP Java client: tool list and safety hints, no approve tool, 401 without token, 403 for foreign origins, scopes, confirm/decline/no-elicitation paths, the 1,000 cap, untrusted text labelling, safe errors, append-only audit |
 
 Measured locally (laptop, Docker with 8 CPUs, 10 concurrent curl clients, 200 payments): p50 120 ms and p95 194 ms per create; all 200 booked in the ledger about 1.3 s after the last request.
 
@@ -205,6 +243,7 @@ payflow/
   payment-service/   REST API, idempotency, fraud check client, maker-checker, outbox, reconciliation
   ledger-service/    Kafka consumer, double-entry ledger, outbox, read API
   fraud-service/     rule-based fraud check with a chaos switch for demos
+  mcp-server/        MCP server for AI assistants: scoped tools, human confirmation, audit log
   observability/     Prometheus scrape config, Grafana data source + dashboard
   Dockerfile         one multi-stage build for all services
   docker-compose.yml infrastructure + optional "apps" and "observability" profiles
