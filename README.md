@@ -46,6 +46,26 @@ flowchart LR
 4. payment-service marks the payment **SETTLED**.
 5. Every night, **reconciliation** compares settled payments with ledger postings and records any mismatch.
 
+## Screenshots
+
+All captured from the running system on 2026-11-18 (how: [docs/screenshots](docs/screenshots)).
+
+**Grafana dashboard during a 4-minute run with a fraud-service outage in the middle.** Approved payments (green) drop and held payments (yellow) rise while the fraud check is down, then recover. The ledger follows the same curve, and nothing is dead-lettered or mismatched.
+
+![Grafana PayFlow overview dashboard](docs/screenshots/grafana-dashboard.png)
+
+**The same dashboard during the outage:** the circuit breaker is open (1), so payment-service stops calling fraud-service and holds new payments for a checker instead of approving them blindly.
+
+![Circuit breaker open during the outage](docs/screenshots/circuit-breaker.png)
+
+**Real API calls and responses:** create, idempotent replay, SETTLED via Kafka, the ledger's debit and credit, a held payment, the creator refused (403), a checker approving.
+
+![API walkthrough with real responses](docs/screenshots/demo-flow.png)
+
+**CI on GitHub Actions:** each service's tests run in parallel against real PostgreSQL and Kafka, then the Docker images are built.
+
+![GitHub Actions run, all jobs green](docs/screenshots/ci-passing.png)
+
 ## What it does
 
 | Area | Feature | How |
@@ -148,23 +168,6 @@ POST /api/reconciliation/runs (auditor1)      -> "status":"MATCHED", "mismatchCo
 | Tests fail with "Could not find a valid Docker environment" | Start Docker Desktop / Rancher Desktop first: the tests start their own containers. |
 | A payment stays `PENDING_APPROVAL` with "Fraud check unavailable" | Working as designed: fraud-service was down or the circuit breaker is open (30 s). Turn chaos mode off and approve it as `checker1`. |
 
-## Screenshots
-
-Images live in [docs/screenshots](docs/screenshots). See the README there for what to capture.
-
-<!--
-  To show the screenshots, save the images under docs/screenshots/ with these names,
-  then delete this comment line and the closing one below.
-
-| Grafana dashboard | Payment flow in demo.http |
-|---|---|
-| ![Grafana PayFlow overview](docs/screenshots/grafana-dashboard.png) | ![demo.http walkthrough](docs/screenshots/demo-flow.png) |
-
-| Circuit breaker opening (logs) | Test run |
-|---|---|
-| ![Circuit breaker log](docs/screenshots/circuit-breaker.png) | ![All tests passing](docs/screenshots/tests-passing.png) |
--->
-
 ## API
 
 | Service | Endpoint | Who |
@@ -185,11 +188,11 @@ Errors are RFC 9457 problem-detail JSON.
 ./mvnw verify            # all services
 ```
 
-70 tests, all run on every push by GitHub Actions. Integration tests start **real PostgreSQL 17 and Kafka 4.2 in Docker** (Testcontainers); external HTTP services are replaced by small stub servers so failures can be staged.
+71 tests, all run on every push by GitHub Actions. Integration tests start **real PostgreSQL 17 and Kafka 4.2 in Docker** (Testcontainers); external HTTP services are replaced by small stub servers so failures can be staged.
 
 | Service | Tests | Highlights |
 |---|---|---|
-| payment-service | 52 | 20 simultaneous same-key requests create exactly 1 payment; roles and four-eyes rule; retries, timeout and circuit breaker against a failing fraud stub; outbox publishing; settlement from Kafka; duplicate and poison events; every reconciliation mismatch type |
+| payment-service | 53 | 20 simultaneous same-key requests create exactly 1 payment; roles and four-eyes rule; retries, timeout and circuit breaker against a failing fraud stub (plus a regression test that blips fixed by a retry never open the circuit); outbox publishing; settlement from Kafka; duplicate and poison events; every reconciliation mismatch type |
 | ledger-service | 13 | Balanced debit/credit per payment; duplicate deliveries booked once; dead-letter topic; database refuses an unbalanced posting; ledger rows can't be updated or deleted |
 | fraud-service | 5 | Allow / review / deny rules, validation, chaos mode |
 
