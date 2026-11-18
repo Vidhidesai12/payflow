@@ -1,0 +1,44 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: ledger-service
+  datasource:
+    # Its own database: the ledger never shares tables with payment-service.
+    url: jdbc:postgresql://localhost:15433/ledger
+    username: ledger
+    password: ledger
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: ledger-service
+      auto-offset-reset: earliest
+      # Offsets are committed by Spring after the listener returns, so a crash re-delivers the event.
+      enable-auto-commit: false
+    producer:
+      # Wait for all in-sync replicas and let the broker discard duplicate sends from retries.
+      acks: all
+      properties:
+        enable.idempotence: true
+    listener:
+      ack-mode: record
+
+payflow:
+  topics:
+    payment-events: payments.events
+    ledger-events: ledger.events
+  outbox:
+    poll-interval: 500ms
+    batch-size: 100
+    keep-published-for: 7d
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

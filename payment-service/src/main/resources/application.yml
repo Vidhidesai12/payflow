@@ -1,0 +1,65 @@
+spring:
+  application:
+    name: payment-service
+  datasource:
+    url: jdbc:postgresql://localhost:15432/payflow
+    username: payflow
+    password: payflow
+  jpa:
+    # Keep database sessions scoped to the service layer, not the whole HTTP request.
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema; Hibernate only checks that the entities match it.
+      ddl-auto: validate
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: payment-service
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+    listener:
+      ack-mode: record
+
+payflow:
+  # Payments strictly above this amount need a second person (a "checker") to approve them.
+  approval-threshold: 10000.00
+  topics:
+    payment-events: payments.events
+    ledger-events: ledger.events
+  outbox:
+    poll-interval: 500ms
+    batch-size: 100
+    keep-published-for: 7d
+  fraud:
+    base-url: http://localhost:8082
+    connect-timeout: 500ms
+    read-timeout: 1s
+    max-attempts: 3            # 1 call + 2 retries
+    initial-backoff: 200ms     # then 400ms
+    sliding-window-size: 10    # judge the circuit on the last 10 calls...
+    minimum-calls: 5           # ...once there are at least 5
+    failure-rate-threshold: 50 # open when half of them failed
+    wait-in-open-state: 30s    # then fail fast for 30s before trying again
+  ledger:
+    base-url: http://localhost:8081
+  reconciliation:
+    cron: "0 30 1 * * *"       # 01:30 UTC daily
+    settlement-grace: 10m
+  security:
+    # Demo users for local runs only. Real deployments use an identity provider, never passwords in config.
+    users:
+      - { username: maker1,   password: maker1-pass,   roles: [MAKER] }
+      - { username: maker2,   password: maker2-pass,   roles: [MAKER] }
+      - { username: checker1, password: checker1-pass, roles: [CHECKER] }
+      - { username: lead1,    password: lead1-pass,    roles: [MAKER, CHECKER] }
+      - { username: auditor1, password: auditor1-pass, roles: [AUDITOR] }
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

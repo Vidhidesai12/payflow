@@ -1,0 +1,19 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: fraud-service
+
+fraud:
+  # Demo data: payments touching these accounts are refused / sent for human review.
+  blocked-accounts:
+    - BLOCKED0001
+  watchlist-accounts:
+    - WATCH0001
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

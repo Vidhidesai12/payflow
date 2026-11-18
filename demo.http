@@ -1,0 +1,83 @@
+### PayFlow demo walkthrough
+### Run each request in order with the VS Code "REST Client" extension (humao.rest-client).
+### Start everything first:  docker compose --profile apps up -d --build
+
+@payments = http://127.0.0.1:8080/api
+@ledger = http://127.0.0.1:8081/api/ledger
+@fraud = http://127.0.0.1:8082/api
+
+### 1. maker1 creates a small payment -> APPROVED straight away (fraud check said ALLOW)
+# @name small
+POST {{payments}}/payments
+Authorization: Basic maker1 maker1-pass
+Content-Type: application/json
+Idempotency-Key: demo-small-1
+
+{"debtorAccount": "ACC10001", "creditorAccount": "ACC20002", "amount": 150.00, "currency": "USD"}
+
+### 2. Same request again -> 200 + Idempotent-Replayed: true, same payment ID, no second charge
+POST {{payments}}/payments
+Authorization: Basic maker1 maker1-pass
+Content-Type: application/json
+Idempotency-Key: demo-small-1
+
+{"debtorAccount": "ACC10001", "creditorAccount": "ACC20002", "amount": 150.00, "currency": "USD"}
+
+### 3. A second later the ledger has booked it and the payment is SETTLED
+GET {{payments}}/payments/{{small.response.body.id}}
+Authorization: Basic auditor1 auditor1-pass
+
+### 4. The double entry in the ledger: one DEBIT, one CREDIT, same amount
+GET {{ledger}}/postings/{{small.response.body.id}}
+
+### 5. Balances: ACC10001 is -150.00, ACC20002 is +150.00
+GET {{ledger}}/accounts/ACC10001/balances
+
+### 6. Trial balance: total debits == total credits
+GET {{ledger}}/trial-balance
+
+### 7. A large payment is held for a checker
+# @name large
+POST {{payments}}/payments
+Authorization: Basic lead1 lead1-pass
+Content-Type: application/json
+Idempotency-Key: demo-large-1
+
+{"debtorAccount": "ACC10001", "creditorAccount": "ACC30003", "amount": 25000.00, "currency": "USD"}
+
+### 8. lead1 has the CHECKER role too, but can't approve their own payment -> 403
+POST {{payments}}/payments/{{large.response.body.id}}/approve
+Authorization: Basic lead1 lead1-pass
+
+### 9. A different checker can -> APPROVED, then SETTLED once the ledger books it
+POST {{payments}}/payments/{{large.response.body.id}}/approve
+Authorization: Basic checker1 checker1-pass
+
+### 10. Make the fraud service fail every call (chaos mode)
+PUT {{fraud}}/chaos
+Content-Type: application/json
+
+{"failureRate": 1.0, "delayMs": 0}
+
+### 11. Payments are now held for manual review instead of failing or being approved blindly.
+###     Send this 3 times with new keys: after ~5 failed calls the circuit breaker opens and
+###     payment-service stops calling the fraud service for 30s (watch its log).
+POST {{payments}}/payments
+Authorization: Basic maker1 maker1-pass
+Content-Type: application/json
+Idempotency-Key: demo-chaos-{{$guid}}
+
+{"debtorAccount": "ACC10001", "creditorAccount": "ACC40004", "amount": 20.00, "currency": "USD"}
+
+### 12. Turn chaos mode off again
+PUT {{fraud}}/chaos
+Content-Type: application/json
+
+{"failureRate": 0, "delayMs": 0}
+
+### 13. Run reconciliation for the last 24 hours -> MATCHED
+POST {{payments}}/reconciliation/runs
+Authorization: Basic auditor1 auditor1-pass
+
+### 14. Metrics in Prometheus format
+GET http://127.0.0.1:8080/actuator/prometheus
