@@ -1,8 +1,28 @@
 # PayFlow
 
+[![CI](https://github.com/Vidhidesai12/payflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Vidhidesai12/payflow/actions/workflows/ci.yml)
+![Java 21](https://img.shields.io/badge/Java-21-007396)
+![Spring Boot 4](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F)
+![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-336791)
+![Kafka 4.2](https://img.shields.io/badge/Kafka-4.2-231F20)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
+
 An event-driven payments system in Java 21 and Spring Boot 4. A personal project for learning how banks move money safely: no duplicate charges, no money booked twice, two-person approval for risky payments, a double-entry ledger, and a nightly check that everything agrees.
 
-Everything runs locally in Docker with free tools.
+Everything runs locally in Docker with free tools. *Personal learning project; not used in production.*
+
+**Start here if you're reviewing the code:**
+
+| What | Where |
+|---|---|
+| Exactly-once payment creation under concurrent retries | [PaymentService.create](payment-service/src/main/java/com/payflow/payment/service/PaymentService.java) |
+| Payment lifecycle and maker-checker rule | [Payment](payment-service/src/main/java/com/payflow/payment/domain/Payment.java), [PaymentStatus](payment-service/src/main/java/com/payflow/payment/domain/PaymentStatus.java) |
+| Transactional outbox relay | [OutboxRelay](payment-service/src/main/java/com/payflow/payment/messaging/OutboxRelay.java) |
+| Idempotent ledger consumer, double entry | [LedgerService](ledger-service/src/main/java/com/payflow/ledger/service/LedgerService.java) |
+| Ledger rules enforced by PostgreSQL | [V1__create_ledger.sql](ledger-service/src/main/resources/db/migration/V1__create_ledger.sql) |
+| Timeouts, retry, circuit breaker, fail-safe fallback | [FraudCheckClient](payment-service/src/main/java/com/payflow/payment/fraud/FraudCheckClient.java) |
+| Reconciliation | [ReconciliationService](payment-service/src/main/java/com/payflow/payment/reconciliation/ReconciliationService.java) |
+| The 20-request race test | [PaymentApiIntegrationTest](payment-service/src/test/java/com/payflow/payment/PaymentApiIntegrationTest.java) |
 
 ## Architecture
 
@@ -117,6 +137,7 @@ payflow/
   docker-compose.yml infrastructure + optional "apps" and "observability" profiles
   demo.http          click-through demo
   AI_NOTES.md        how AI tools were used, and the design decisions
+  LICENSE            MIT
 ```
 
 ## Known limits (deliberate, for a portfolio project)
@@ -127,4 +148,8 @@ payflow/
 - The outbox relay polls every 500 ms. Change-data-capture (Debezium) would cut latency at the cost of more infrastructure.
 - Account balances may go negative: overdraft and funds-availability rules are out of scope.
 
-See [AI_NOTES.md](AI_NOTES.md) for how AI tools were used on this project.
+## License
+
+[MIT](LICENSE)
+
+See [AI_NOTES.md](AI_NOTES.md) for how AI tools were used on this project and the reasoning behind each design decision.
