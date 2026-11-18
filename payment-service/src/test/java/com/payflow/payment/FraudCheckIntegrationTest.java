@@ -70,9 +70,10 @@ class FraudCheckIntegrationTest extends IntegrationTestSupport {
     void circuitOpensAfterRepeatedFailuresAndStopsCallingTheFraudService() {
         FRAUD.on(FRAUD_PATH, b -> new StubHttpServer.Response(500, "{}", 0));
 
-        for (int i = 0; i < 3; i++) {
-            createOk("maker1", "100.00"); // 3 payments x 3 attempts = 9 failed calls
+        for (int i = 0; i < 5; i++) {
+            createOk("maker1", "100.00"); // 5 checks that still fail after 3 attempts each
         }
+        assertThat(FRAUD.calls(FRAUD_PATH)).isEqualTo(15);
         assertThat(fraudCheckClient.circuitState()).isEqualTo(CircuitBreaker.State.OPEN);
 
         int callsBefore = FRAUD.calls(FRAUD_PATH);
@@ -80,5 +81,25 @@ class FraudCheckIntegrationTest extends IntegrationTestSupport {
 
         assertThat(FRAUD.calls(FRAUD_PATH)).isEqualTo(callsBefore); // failed fast, no network call
         assertThat(p.status()).isEqualTo(PaymentStatus.PENDING_APPROVAL);
+    }
+
+    /**
+     * Regression test for a problem seen in a live run: half of all attempts failing, but every retry
+     * succeeding, must not open the circuit. When the breaker sat inside the retry it counted each failed
+     * attempt, opened, and held good payments for manual review.
+     */
+    @Test
+    void blipsThatRetriesFixDoNotOpenTheCircuit() {
+        var attempt = new java.util.concurrent.atomic.AtomicInteger();
+        FRAUD.on(FRAUD_PATH, b -> attempt.incrementAndGet() % 2 == 1
+                ? new StubHttpServer.Response(503, "{}", 0)
+                : StubHttpServer.Response.json("{\"decision\":\"ALLOW\"}"));
+
+        for (int i = 0; i < 6; i++) {
+            assertThat(createOk("maker1", "100.00").status()).isEqualTo(PaymentStatus.APPROVED);
+        }
+
+        assertThat(FRAUD.calls(FRAUD_PATH)).isEqualTo(12); // every check needed one retry
+        assertThat(fraudCheckClient.circuitState()).isEqualTo(CircuitBreaker.State.CLOSED);
     }
 }

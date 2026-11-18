@@ -2,7 +2,6 @@ package com.payflow.payment.fraud;
 
 import com.payflow.payment.domain.FraudVerdict;
 import com.payflow.payment.domain.Payment;
-import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -31,9 +30,13 @@ import java.util.function.Supplier;
  * Calls fraud-service, protected by three layers, innermost first:
  * <ol>
  *   <li><b>Timeouts</b> on connect and read, so a hung service can't hold our request threads.</li>
- *   <li><b>Circuit breaker</b>: once most recent calls fail, stop calling for a while and fail fast.</li>
  *   <li><b>Retry</b> with exponential backoff, for brief blips (only on errors worth retrying).</li>
+ *   <li><b>Circuit breaker</b>: once most recent checks failed even after retrying, stop calling for a
+ *       while and fail fast.</li>
  * </ol>
+ * The breaker sits OUTSIDE the retry on purpose. With retry outside, the breaker counted every failed
+ * attempt, including ones the next retry fixed: in a live run, a few blips right after a cold start
+ * opened the circuit and held a minute of good payments for manual review.
  * If all of that fails, the answer is {@link FraudVerdict#UNAVAILABLE}: the payment is held for a human,
  * never approved blindly ("fail safe", not "fail open").
  */
@@ -78,11 +81,12 @@ public class FraudCheckClient {
         RetryRegistry retries = RetryRegistry.of(RetryConfig.custom()
                 .maxAttempts(props.maxAttempts())
                 .intervalFunction(IntervalFunction.ofExponentialBackoff(props.initialBackoff(), 2.0))
-                // Retry network trouble and 5xx. Never retry 4xx (our bug) or an open circuit (pointless).
+                // Retry network trouble and 5xx only. Never retry a 4xx: that's our bug, not a blip.
                 .retryExceptions(ResourceAccessException.class, HttpServerErrorException.class)
-                .ignoreExceptions(CallNotPermittedException.class)
                 .build());
         this.retry = retries.retry("fraud-service");
+        retry.getEventPublisher().onRetry(e -> log.info("Retrying fraud check (retry {}) after: {}",
+                e.getNumberOfRetryAttempts(), String.valueOf(e.getLastThrowable())));
 
         TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(breakers).bindTo(meters);
         TaggedRetryMetrics.ofRetryRegistry(retries).bindTo(meters);
@@ -91,8 +95,8 @@ public class FraudCheckClient {
     }
 
     public FraudVerdict check(Payment payment) {
-        Supplier<FraudVerdict> guarded = Retry.decorateSupplier(retry,
-                CircuitBreaker.decorateSupplier(circuitBreaker, () -> callFraudService(payment)));
+        Supplier<FraudVerdict> guarded = CircuitBreaker.decorateSupplier(circuitBreaker,
+                Retry.decorateSupplier(retry, () -> callFraudService(payment)));
         return timer.record(() -> {
             try {
                 return guarded.get();
