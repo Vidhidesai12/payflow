@@ -5,6 +5,7 @@ import com.payflow.mcp.payflow.PayFlowException;
 import com.payflow.mcp.security.SecurityConfig;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.modelcontextprotocol.common.McpTransportContext;
+import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.mcp.annotation.context.McpSyncRequestContext;
@@ -57,8 +58,12 @@ public class ToolCalls {
                 scopes instanceof Set<?> s ? (Set<String>) s : Set.of());
     }
 
-    public Reply run(McpSyncRequestContext ctx, String tool, String requiredScope, Map<String, ?> args,
-                     Supplier<Object> body) {
+    /**
+     * Returns the MCP result directly (never throws), so a failure reaches the client as exactly one
+     * text block with isError=true. Throwing instead made Spring AI send the message twice.
+     */
+    public McpSchema.CallToolResult run(McpSyncRequestContext ctx, String tool, String requiredScope,
+                                        Map<String, ?> args, Supplier<Object> body) {
         Caller caller = caller(ctx);
         Instant start = clock.instant();
         String argsJson = json.writeValueAsString(args);
@@ -67,20 +72,24 @@ public class ToolCalls {
                 throw new ToolException(AuditLog.Outcome.DENIED,
                         "Not allowed: this client lacks the '" + requiredScope + "' scope");
             }
-            Reply reply = new Reply(NOTICE, body.get());
+            String reply = json.writeValueAsString(new Reply(NOTICE, body.get()));
             finish(start, caller, tool, argsJson, AuditLog.Outcome.OK, null);
-            return reply;
+            return McpSchema.CallToolResult.builder().addTextContent(reply).isError(false).build();
         } catch (ToolException e) {
             finish(start, caller, tool, argsJson, e.outcome(), e.getMessage());
-            throw e;
+            return error(e.getMessage());
         } catch (PayFlowException e) {
             finish(start, caller, tool, argsJson, AuditLog.Outcome.ERROR, e.getMessage());
-            throw new ToolException(AuditLog.Outcome.ERROR, e.getMessage());
+            return error(e.getMessage());
         } catch (RuntimeException e) {
             log.error("Tool {} failed for {}", tool, caller.client(), e);
             finish(start, caller, tool, argsJson, AuditLog.Outcome.ERROR, "Internal error");
-            throw new ToolException(AuditLog.Outcome.ERROR, "The tool failed unexpectedly; the error was logged");
+            return error("The tool failed unexpectedly; the error was logged");
         }
+    }
+
+    private static McpSchema.CallToolResult error(String message) {
+        return McpSchema.CallToolResult.builder().addTextContent(message).isError(true).build();
     }
 
     private void finish(Instant start, Caller caller, String tool, String argsJson, AuditLog.Outcome outcome,

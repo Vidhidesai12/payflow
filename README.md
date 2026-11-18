@@ -113,6 +113,10 @@ Plus a resource (`payflow://docs/payment-lifecycle`) and a prompt (`investigate_
 - **Audit:** every call is written to an append-only `tool_calls` table (PostgreSQL triggers block UPDATE/DELETE): client, tool, arguments, outcome, duration.
 - **Transport hygiene:** requests from browser origins that aren't allowed get 403. Errors return safe messages, never stack traces.
 
+![Live MCP session against PayFlow](docs/screenshots/mcp-session.png)
+
+*Real output: a read-only client lists the tools, reads payments, the ledger and reconciliation; `create_payment` is denied for the read-only token and refused for a client that can't ask a person; every call lands in the audit table.*
+
 **Connect Claude Code** (stack running, demo tokens are for local use only):
 
 ```bash

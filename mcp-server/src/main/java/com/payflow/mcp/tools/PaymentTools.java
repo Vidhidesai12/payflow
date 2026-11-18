@@ -67,7 +67,7 @@ public class PaymentTools {
             description = "Look up one PayFlow payment by its ID: amount, accounts, status, and why it is held or failed.",
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true,
                     openWorldHint = false))
-    public ToolCalls.Reply getPayment(McpSyncRequestContext ctx,
+    public McpSchema.CallToolResult getPayment(McpSyncRequestContext ctx,
                                       @McpToolParam(description = "Payment ID (UUID)", required = true) String paymentId) {
         return calls.run(ctx, "get_payment", Scopes.PAYMENTS_READ, Map.of("paymentId", String.valueOf(paymentId)),
                 () -> PaymentView.of(payflow.payment(uuid(paymentId))));
@@ -78,7 +78,7 @@ public class PaymentTools {
                     + "(CREATED, PENDING_APPROVAL, APPROVED, SETTLED, FAILED).",
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true,
                     openWorldHint = false))
-    public ToolCalls.Reply listPayments(McpSyncRequestContext ctx,
+    public McpSchema.CallToolResult listPayments(McpSyncRequestContext ctx,
                                         @McpToolParam(description = "Optional status filter", required = false) String status,
                                         @McpToolParam(description = "How many to return, 1-50 (default 20)", required = false) Integer limit) {
         Map<String, Object> args = new LinkedHashMap<>();
@@ -98,7 +98,7 @@ public class PaymentTools {
                     + "(above the approval threshold, flagged by the fraud check, or fraud check unavailable).",
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true,
                     openWorldHint = false))
-    public ToolCalls.Reply listHeldPayments(McpSyncRequestContext ctx,
+    public McpSchema.CallToolResult listHeldPayments(McpSyncRequestContext ctx,
                                             @McpToolParam(description = "How many to return, 1-50 (default 20)", required = false) Integer limit) {
         Map<String, Object> args = new LinkedHashMap<>();
         args.put("limit", limit);
@@ -113,7 +113,7 @@ public class PaymentTools {
                     + "Large payments still wait for a human checker; this server cannot approve payments.",
             annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false, idempotentHint = true,
                     openWorldHint = false))
-    public ToolCalls.Reply createPayment(McpSyncRequestContext ctx,
+    public McpSchema.CallToolResult createPayment(McpSyncRequestContext ctx,
                                          @McpToolParam(description = "Debtor (paying) account, 6-34 uppercase letters or digits", required = true) String debtorAccount,
                                          @McpToolParam(description = "Creditor (receiving) account, 6-34 uppercase letters or digits", required = true) String creditorAccount,
                                          @McpToolParam(description = "Amount as a decimal string with at most 2 decimals, e.g. \"150.00\"", required = true) String amount,

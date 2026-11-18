@@ -183,6 +183,7 @@ class McpServerIntegrationTest {
         var result = connect(READ_TOKEN, null).callTool(call("get_payment", Map.of("paymentId", "not-a-uuid")));
 
         assertThat(result.isError()).isTrue();
+        assertThat(result.content()).hasSize(1); // the message once, not repeated
         assertThat(textOf(result)).contains("paymentId must be a UUID");
         assertThat(PAYFLOW.received).isEmpty();
     }

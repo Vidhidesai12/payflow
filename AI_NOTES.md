@@ -64,4 +64,5 @@ An honest record of how AI coding tools were used on this project. Fill these in
 **Bugs caught during this step:**
 - Rejecting a foreign Origin with `sendError(403)` came back as 401, because the error page itself is behind security. Fixed by writing the 403 response directly.
 - The agent limit `1000.00` in YAML was read as the float `1000.0`. Fixed by quoting it, so money stays an exact decimal.
+- Found in the live screenshot: every error message reached the client twice. Throwing from a tool made Spring AI send two identical text blocks. Tools now return the MCP result object directly (one block, `isError: true`), and a test checks there is exactly one.
 - A first live check failed in the test script, not the server: the server answers some calls as an event stream, which the script read incorrectly.
