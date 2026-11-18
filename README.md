@@ -68,17 +68,43 @@ flowchart LR
 
 ## Run it (all free)
 
-You need **Docker** (Docker Desktop or Rancher Desktop). For running from source you also need **JDK 21**.
+**Prerequisites:** [Docker](https://www.docker.com/products/docker-desktop/) (Docker Desktop or Rancher Desktop) and Git. For running from source you also need **JDK 21**. About 4 GB of free memory for Docker.
 
-**Everything in Docker, one command:**
+### Option A: everything in Docker (recommended)
 
 ```bash
-docker compose --profile apps up -d --build
+git clone https://github.com/Vidhidesai12/payflow.git
+cd payflow
+docker compose --profile apps up -d --build      # first build takes a few minutes
 ```
 
-Then open [demo.http](demo.http) in VS Code with the REST Client extension and click through the walkthrough. Add `--profile observability` for Prometheus (`:9090`) and Grafana (`:3000`, dashboard "PayFlow overview").
+Check that all three services are up (each should print `{"status":"UP"}`):
 
-**Or infrastructure in Docker, services from source:**
+```bash
+curl http://127.0.0.1:8080/actuator/health   # payment-service
+curl http://127.0.0.1:8081/actuator/health   # ledger-service
+curl http://127.0.0.1:8082/actuator/health   # fraud-service
+```
+
+Then open [demo.http](demo.http) in VS Code with the [REST Client](https://marketplace.visualstudio.com/items?itemName=humao.rest-client) extension and click **Send Request** above each step, top to bottom.
+
+Add metrics dashboards with:
+
+```bash
+docker compose --profile apps --profile observability up -d --build
+```
+
+| What | URL | Login |
+|---|---|---|
+| payment-service API | http://127.0.0.1:8080/api/payments | demo users below |
+| ledger-service API | http://127.0.0.1:8081/api/ledger/trial-balance | none (internal) |
+| fraud-service API | http://127.0.0.1:8082/api/chaos | none (internal) |
+| Prometheus | http://127.0.0.1:9090 | none |
+| Grafana, dashboard "PayFlow overview" | http://127.0.0.1:3000 | admin / admin |
+
+Stop everything with `docker compose --profile apps --profile observability down`. Add `-v` to also delete all data.
+
+### Option B: infrastructure in Docker, services from source
 
 ```bash
 docker compose up -d                                   # PostgreSQL x2 (host ports 15432, 15433) + Kafka
@@ -94,6 +120,50 @@ curl -i -u maker1:maker1-pass -X POST 127.0.0.1:8080/api/payments \
   -H "Content-Type: application/json" -H "Idempotency-Key: demo-1" \
   -d '{"debtorAccount":"ACC10001","creditorAccount":"ACC20002","amount":150.00,"currency":"USD"}'
 ```
+
+### What you should see
+
+Real responses from a local run (IDs and timestamps will differ):
+
+```text
+POST /api/payments (maker1, 150.00)           -> 201  "status":"APPROVED"
+POST /api/payments (same Idempotency-Key)     -> 200  Idempotent-Replayed: true   (same payment, no second charge)
+GET  /api/payments/{id} about 1.5 s later     -> "status":"SETTLED"
+GET  /api/ledger/postings/{id}                -> DEBIT ACC10001 150.00 / CREDIT ACC20002 150.00
+GET  /api/ledger/trial-balance                -> {"currency":"USD","debits":150.00,"credits":150.00,"balanced":true}
+POST /api/payments (lead1, 25000.00)          -> "status":"PENDING_APPROVAL", "holdReason":"Amount is above the approval threshold"
+POST /api/payments/{id}/approve (lead1)       -> 403  "User 'lead1' created this payment and cannot also approve it"
+POST /api/payments/{id}/approve (checker1)    -> "status":"APPROVED", "approvedBy":"checker1"   then SETTLED
+PUT  /api/chaos {"failureRate":1.0} + create  -> "holdReason":"Fraud check unavailable; manual review required"
+POST /api/reconciliation/runs (auditor1)      -> "status":"MATCHED", "mismatchCount":0
+```
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `port is already allocated` for 15432, 15433, 9092 or 808x | Something else uses that port. Stop it, or change the database ports with `PAYFLOW_DB_PORT=25432 LEDGER_DB_PORT=25433 docker compose ...` |
+| `curl localhost:8080` hangs but `127.0.0.1:8080` works | On Windows with WSL, `localhost` can resolve to a WSL port forwarder. Use `127.0.0.1`. |
+| payment-service exits at startup | Kafka or PostgreSQL wasn't ready yet. Run `docker compose --profile apps up -d` again. |
+| Tests fail with "Could not find a valid Docker environment" | Start Docker Desktop / Rancher Desktop first: the tests start their own containers. |
+| A payment stays `PENDING_APPROVAL` with "Fraud check unavailable" | Working as designed: fraud-service was down or the circuit breaker is open (30 s). Turn chaos mode off and approve it as `checker1`. |
+
+## Screenshots
+
+Images live in [docs/screenshots](docs/screenshots). See the README there for what to capture.
+
+<!--
+  To show the screenshots, save the images under docs/screenshots/ with these names,
+  then delete this comment line and the closing one below.
+
+| Grafana dashboard | Payment flow in demo.http |
+|---|---|
+| ![Grafana PayFlow overview](docs/screenshots/grafana-dashboard.png) | ![demo.http walkthrough](docs/screenshots/demo-flow.png) |
+
+| Circuit breaker opening (logs) | Test run |
+|---|---|
+| ![Circuit breaker log](docs/screenshots/circuit-breaker.png) | ![All tests passing](docs/screenshots/tests-passing.png) |
+-->
 
 ## API
 
