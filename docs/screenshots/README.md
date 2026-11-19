@@ -8,6 +8,7 @@ All images were captured from the real running system on 2026-11-18 with headles
 | `circuit-breaker.png` | The same dashboard ~25 s into the outage, circuit breaker open | Same run, captured while the breaker was open |
 | `demo-flow.png` | Seven real API calls and their responses | A small Python script calling the live API, writing each request and the response (fields trimmed, values untouched) to an HTML page, then screenshotted |
 | `mcp-session.png` | A live MCP session against the running stack plus the audit table | A small Python MCP client (JSON-RPC over Streamable HTTP) run against `mcp-server`, its real output rendered to HTML and screenshotted |
+| `analytics-session.png` | A live session against the Python analytics MCP server and its PayFlow account's permissions | The official MCP Python SDK client run against `analytics-mcp` in Docker, real output rendered to HTML and screenshotted |
 | `gateway-demo.png` | The MCP gateway in front of the Java and Python MCP servers: allowed reads, blocked calls, the confirmation relay, audit chain verified and tampering detected, PayFlow's own audit table | `npm run demo` and `npm run verify-audit` against the Docker stack, real output rendered to HTML and screenshotted |
 | `ci-passing.png` | A passing GitHub Actions run | Headless screenshot of the public run page, cropped |
 

@@ -139,6 +139,12 @@ Two more MCP projects in the same repo, in two more languages, each built with t
 | [analytics-mcp](analytics-mcp) | Python 3.13, MCP Python SDK 2.3 | Read-only reporting over the ledger: account statements, daily volume, largest movements, unusual outflows, reconciliation history |
 | [mcp-gateway](mcp-gateway) | TypeScript, Node 24, MCP TypeScript SDK 1.32 | A security proxy in front of both MCP servers. AI clients connect only to the gateway. |
 
+**The analytics server on its own:** five read-only tools, a 401 without a token, input checked before PayFlow is called, and a PayFlow account that can read but not pay.
+
+![Live session against the analytics MCP server](docs/screenshots/analytics-session.png)
+
+*Real output from the official MCP Python SDK client against the running stack. Money comes back as exact decimal strings; the 403 is PayFlow refusing `analytics-agent` (AUDITOR only) when it tries to create a payment.*
+
 **What the gateway checks on every tool call**
 
 | Threat | Defence | Where |
