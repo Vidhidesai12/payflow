@@ -4,7 +4,8 @@
  */
 
 const RULES: { name: string; pattern: RegExp; replace: (m: string) => string | null }[] = [
-  { name: 'card', pattern: /\b(?:\d[ -]?){13,19}\b/g, replace: (m) => (luhn(m.replace(/\D/g, '')) ? '[REDACTED CARD]' : null) },
+  // Starts and ends on a digit, so the space after a card number is kept ("card 4111 ... 1111 over" stays readable).
+  { name: 'card', pattern: /\b\d(?:[ -]?\d){12,18}\b/g, replace: (m) => (luhn(m.replace(/\D/g, '')) ? '[REDACTED CARD]' : null) },
   { name: 'aws-key', pattern: /\bAKIA[0-9A-Z]{16}\b/g, replace: () => '[REDACTED KEY]' },
   { name: 'api-key', pattern: /\b(?:sk|pk|rk)[-_](?:live|test)[-_][0-9A-Za-z]{8,}\b/g, replace: () => '[REDACTED KEY]' },
   { name: 'bearer', pattern: /\bBearer\s+[A-Za-z0-9._~+/-]{12,}=*/g, replace: () => 'Bearer [REDACTED]' },
