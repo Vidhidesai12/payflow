@@ -16,9 +16,10 @@ export interface CatalogEntry {
 }
 
 /** Opens an MCP client connection to one upstream, with the gateway's own token for that upstream. */
-export async function connectUpstream(upstream: UpstreamConfig, capabilities: ClientCapabilities = {}): Promise<Client> {
-  const token = process.env[upstream.tokenEnv];
-  if (!token) throw new Error(`environment variable ${upstream.tokenEnv} is not set`);
+export async function connectUpstream(upstream: UpstreamConfig, capabilities: ClientCapabilities = {},
+  tokenEnv: string = upstream.tokenEnv): Promise<Client> {
+  const token = process.env[tokenEnv];
+  if (!token) throw new Error(`environment variable ${tokenEnv} is not set`);
   const client = new Client({ name: 'payflow-mcp-gateway', version: '0.1.0' }, { capabilities });
   const transport = new StreamableHTTPClientTransport(new URL(upstream.url), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
@@ -56,9 +57,14 @@ export class Catalog {
           }
           next.set(key, { key, upstream: upstream.name, tool: tool.name, definition, pin });
         }
+        if (this.reachable.get(upstream.name) === false) console.log(`upstream ${upstream.name} is reachable again`);
         this.reachable.set(upstream.name, true);
-      } catch {
+      } catch (error) {
         // Keep nothing from an unreachable upstream: its tools disappear until it is back.
+        // Log on the change only, so a long outage doesn't flood the log.
+        if (this.reachable.get(upstream.name) !== false) {
+          console.warn(`upstream ${upstream.name} unreachable at ${upstream.url}: ${error instanceof Error ? error.message : String(error)}`);
+        }
         this.reachable.set(upstream.name, false);
       } finally {
         await client?.close().catch(() => undefined);

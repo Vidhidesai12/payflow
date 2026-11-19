@@ -22,6 +22,12 @@ export interface ClientPolicy {
   denyTools: string[];
   callsPerMinute: number;
   argumentLimits: ArgumentLimit[];
+  /**
+   * Which upstream identity this client's calls use, as upstream name -> environment variable.
+   * Defaults to the upstream's own tokenEnv (its least-privileged token), so the gateway never turns
+   * a read-only client into an operator upstream (no confused deputy).
+   */
+  upstreamTokenEnv?: Record<string, string>;
 }
 
 export interface GatewayConfig {

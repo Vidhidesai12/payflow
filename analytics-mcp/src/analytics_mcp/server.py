@@ -152,8 +152,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     port = int(os.environ.get("PORT", "8084"))
     api = HttpPayFlowApi(
-        ledger_url=os.environ.get("PAYFLOW_LEDGER_URL", "http://localhost:8081"),
-        payments_url=os.environ.get("PAYFLOW_PAYMENTS_URL", "http://localhost:8080"),
+        ledger_url=os.environ.get("PAYFLOW_LEDGER_URL", "http://127.0.0.1:8081"),
+        payments_url=os.environ.get("PAYFLOW_PAYMENTS_URL", "http://127.0.0.1:8080"),
         user=os.environ.get("PAYFLOW_USER", "analytics-agent"),
         password=os.environ.get("PAYFLOW_PASSWORD", "analytics-agent-pass"),
     )

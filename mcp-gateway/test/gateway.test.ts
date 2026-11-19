@@ -68,10 +68,11 @@ const opened: Client[] = [];
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'gateway-'));
-  payflow = await startUpstream('payflow', 'up-payflow', payflowTools);
-  analytics = await startUpstream('analytics', 'up-analytics', analyticsTools);
+  payflow = await startUpstream('payflow', ['up-payflow', 'up-payflow-operator'], payflowTools);
+  analytics = await startUpstream('analytics', ['up-analytics'], analyticsTools);
   process.env.TEST_PAYFLOW_TOKEN = 'up-payflow';
   process.env.TEST_ANALYTICS_TOKEN = 'up-analytics';
+  process.env.TEST_PAYFLOW_OPERATOR_TOKEN = 'up-payflow-operator';
   config = {
     port: 0, allowedHosts: [], allowedOrigins: [], maxArgumentBytes: 2048, catalogRefreshSeconds: 3600,
     pinsFile: join(dir, 'pins.json'), auditFile: join(dir, 'audit.jsonl'),
@@ -81,7 +82,7 @@ beforeAll(async () => {
     ],
     clients: [
       client('reader', 'tok-reader', { allowTools: ['payflow__get_*', 'analytics__*'] }),
-      client('operator', 'tok-operator', { allowTools: ['*'], argumentLimits: [{ tool: 'payflow__create_payment', field: 'amount', max: 250 }] }),
+      client('operator', 'tok-operator', { allowTools: ['*'], upstreamTokenEnv: { payflow: 'TEST_PAYFLOW_OPERATOR_TOKEN' }, argumentLimits: [{ tool: 'payflow__create_payment', field: 'amount', max: 250 }] }),
       client('limited', 'tok-limited', { allowTools: ['analytics__*'], callsPerMinute: 3 }),
     ],
   };
@@ -110,6 +111,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   payflow.calls.length = 0;
+  payflow.callTokens.length = 0;
 });
 
 async function connect(token: string, onElicit?: (message: string) => { action: 'accept' | 'decline'; content?: Record<string, unknown> }) {
@@ -146,6 +148,14 @@ describe('access', () => {
     expect(r.isError).toBeFalsy();
     expect(JSON.parse(text(r))).toEqual({ id: 'p1', status: 'SETTLED' });
     expect(payflow.calls).toEqual(['get_payment']);
+    expect(payflow.callTokens).toEqual(['up-payflow']);
+  });
+
+  it("uses each client's own upstream identity, so a read-only client never borrows operator rights", async () => {
+    await call(await connect('tok-operator'), 'payflow__get_payment', { paymentId: 'p1' });
+    await call(await connect('tok-reader'), 'payflow__get_payment', { paymentId: 'p1' });
+
+    expect(payflow.callTokens).toEqual(['up-payflow-operator', 'up-payflow']);
   });
 
   it('blocks a tool outside the client policy without reaching the upstream', async () => {

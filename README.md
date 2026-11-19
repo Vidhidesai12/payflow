@@ -29,7 +29,11 @@ Everything runs locally in Docker with free tools. *Personal learning project; n
 ```mermaid
 flowchart LR
     client([Client / demo.http]) -->|REST + HTTP Basic| PS[payment-service :8080]
-    ai([AI assistant e.g. Claude]) -->|MCP, Streamable HTTP + token| MCP[mcp-server :8083]
+    ai([AI assistant e.g. Claude]) -->|MCP + gateway token| GW[mcp-gateway :8085<br/>TypeScript]
+    GW -->|MCP, per-client upstream token| MCP[mcp-server :8083<br/>Java]
+    GW -->|MCP| AN[analytics-mcp :8084<br/>Python]
+    AN -->|REST as analytics-agent, AUDITOR only| PS
+    AN -->|REST, read-only| LS
     MCP -->|REST as mcp-agent| PS
     MCP -->|REST, read-only| LS
     MCP --- ADB[(PostgreSQL<br/>audit log)]
@@ -50,6 +54,7 @@ flowchart LR
 4. payment-service marks the payment **SETTLED**.
 5. Every night, **reconciliation** compares settled payments with ledger postings and records any mismatch.
 6. AI assistants connect through **mcp-server** (Model Context Protocol). They can read payments, the ledger and reconciliation, and create small payments after the person confirms. They can never approve.
+7. **analytics-mcp** (Python) adds read-only reporting tools, and **mcp-gateway** (TypeScript) sits in front of both MCP servers: every tool call is checked against the client's policy, tool definitions are pinned, secrets are masked, and every decision lands in a tamper-evident audit log.
 
 ## Screenshots
 
@@ -125,6 +130,51 @@ claude mcp add --transport http payflow http://127.0.0.1:8083/mcp --header "Auth
 
 Then ask, for example, *"Which PayFlow payments are held and why?"* Use `payflow-demo-operator` instead to allow `create_payment`. The server then asks you to confirm each payment; Claude Code shows this as an elicitation dialog in interactive terminal sessions. Run `/mcp` in Claude Code to check the connection.
 
+## MCP gateway and analytics server
+
+Two more MCP projects in the same repo, in two more languages, each built with the official MCP SDK:
+
+| Folder | Language | What it is |
+|---|---|---|
+| [analytics-mcp](analytics-mcp) | Python 3.13, MCP Python SDK 2.3 | Read-only reporting over the ledger: account statements, daily volume, largest movements, unusual outflows, reconciliation history |
+| [mcp-gateway](mcp-gateway) | TypeScript, Node 24, MCP TypeScript SDK 1.32 | A security proxy in front of both MCP servers. AI clients connect only to the gateway. |
+
+**What the gateway checks on every tool call**
+
+| Threat | Defence | Where |
+|---|---|---|
+| A client using tools it shouldn't | Per-client allow and deny lists (`payflow__get_*`), deny wins. Tools a client can't use aren't even listed. | [policy.ts](mcp-gateway/src/policy.ts) |
+| Tool poisoning and rug pulls (a server changes a tool description into hidden instructions) | Every tool definition is pinned by SHA-256. A new or changed tool is quarantined until a person approves it. Descriptions are also scanned for injection phrases. | [pins.ts](mcp-gateway/src/pins.ts) |
+| Runaway agents | Sliding-window rate limit per client, an argument size limit, and per-client numeric limits (the operator may create payments up to 500 here, on top of PayFlow's own 1,000 cap) | [policy.ts](mcp-gateway/src/policy.ts) |
+| Secrets leaking into the model's context | Card numbers (Luhn-checked), API keys, bearer tokens and private keys in results are masked | [redact.ts](mcp-gateway/src/redact.ts) |
+| Confused deputy, token passthrough | Clients only ever hold a gateway token. The gateway holds the upstream tokens, and each client policy picks its own upstream identity, so a read-only client reaches PayFlow with PayFlow's read-only token. | [session.ts](mcp-gateway/src/session.ts) |
+| Bypassing the human | PayFlow's confirmation request (elicitation) is relayed to the person through the gateway. If the person's client can't show it, the gateway doesn't offer that capability upstream, so PayFlow refuses. | [session.ts](mcp-gateway/src/session.ts) |
+| Covering tracks | Hash-chained JSONL audit log: every record carries the hash of the one before it, so editing or deleting a line is detected (`npm run verify-audit`) | [audit.ts](mcp-gateway/src/audit.ts) |
+| Session hijack, DNS rebinding | Sessions are bound to the client that opened them; Host and Origin allow-lists | [http.ts](mcp-gateway/src/http.ts) |
+
+Prometheus scrapes `gateway_tool_calls_total{client,tool,decision}`, `gateway_redactions_total` and `gateway_quarantined_tools` from `/metrics`.
+
+![Gateway demo against the running stack](docs/screenshots/gateway-demo.png)
+
+*Real output of `npm run demo` against the Docker stack: Java and Python reads go through; a read-only client trying to pay and an operator asking for 900.00 are blocked before reaching PayFlow; PayFlow's own "Create a payment of 120.00 USD?" question reaches the person through the gateway; a "no" creates nothing. PayFlow's audit table confirms that reads arrived with its read-only token and payments with its operator token.*
+
+**Connect Claude Code to the gateway** instead of to the Java server directly:
+
+```bash
+claude mcp add --transport http payflow-gateway http://127.0.0.1:8085/mcp --header "Authorization: Bearer gateway-demo-readonly"
+```
+
+Use `gateway-demo-operator` to allow payments. Tools appear as `payflow__*` and `analytics__*`.
+
+**Approving tools (pinning).** When an upstream changes its tools, review them and pin again:
+
+```bash
+cd mcp-gateway && cp .env.example .env && npm ci && npm run build
+npm run pin      # prints every tool with its fingerprint; suspicious ones are left out
+```
+
+`pins.json` is committed, so a changed tool shows up as a diff someone has to review.
+
 ## Run it (all free)
 
 **Prerequisites:** [Docker](https://www.docker.com/products/docker-desktop/) (Docker Desktop or Rancher Desktop) and Git. For running from source you also need **JDK 21**. About 4 GB of free memory for Docker.
@@ -137,12 +187,13 @@ cd payflow
 docker compose --profile apps up -d --build      # first build takes a few minutes
 ```
 
-Check that all three services are up (each should print `{"status":"UP"}`):
+Check that the services are up (each should print `"status":"UP"`):
 
 ```bash
 curl http://127.0.0.1:8080/actuator/health   # payment-service
 curl http://127.0.0.1:8081/actuator/health   # ledger-service
 curl http://127.0.0.1:8082/actuator/health   # fraud-service
+curl http://127.0.0.1:8085/health            # mcp-gateway: both upstreams should be true
 ```
 
 Then open [demo.http](demo.http) in VS Code with the [REST Client](https://marketplace.visualstudio.com/items?itemName=humao.rest-client) extension and click **Send Request** above each step, top to bottom.
@@ -158,7 +209,9 @@ docker compose --profile apps --profile observability up -d --build
 | payment-service API | http://127.0.0.1:8080/api/payments | demo users below |
 | ledger-service API | http://127.0.0.1:8081/api/ledger/trial-balance | none (internal) |
 | fraud-service API | http://127.0.0.1:8082/api/chaos | none (internal) |
-| MCP server | http://127.0.0.1:8083/mcp | Bearer `payflow-demo-readonly` or `payflow-demo-operator` |
+| MCP server (Java) | http://127.0.0.1:8083/mcp | Bearer `payflow-demo-readonly` or `payflow-demo-operator` |
+| Analytics MCP server (Python) | http://127.0.0.1:8084/mcp | Bearer `analytics-demo-token` (normally only the gateway uses it) |
+| MCP gateway | http://127.0.0.1:8085/mcp, `/health`, `/metrics` | Bearer `gateway-demo-readonly` or `gateway-demo-operator` |
 | Prometheus | http://127.0.0.1:9090 | none |
 | Grafana, dashboard "PayFlow overview" | http://127.0.0.1:3000 | admin / admin |
 
@@ -173,7 +226,15 @@ docker compose up -d                                   # PostgreSQL x2 (host por
 ./mvnw -pl payment-service spring-boot:run
 ```
 
-Demo users (local only): `maker1`, `maker2` (MAKER), `checker1` (CHECKER), `lead1` (MAKER + CHECKER), `auditor1` (AUDITOR). The password is the username + `-pass`, for example `maker1-pass`.
+Demo users (local only): `maker1`, `maker2` (MAKER), `checker1` (CHECKER), `lead1` (MAKER + CHECKER), `auditor1` (AUDITOR). The password is the username + `-pass`, for example `maker1-pass`. Service accounts: `mcp-agent` (MAKER + AUDITOR, used by mcp-server) and `analytics-agent` (AUDITOR only, used by analytics-mcp).
+
+The two newer MCP projects also run from source (Python 3.13 and Node 24):
+
+```bash
+cd analytics-mcp && python -m venv .venv && .venv/bin/pip install -e ".[test]" && .venv/bin/python -m analytics_mcp   # :8084
+cd mcp-gateway && cp .env.example .env && npm ci && npm run build && npm start                                     # :8085
+cd mcp-gateway && npm run demo                                                                                      # drive it
+```
 
 ```bash
 curl -i -u maker1:maker1-pass -X POST 127.0.0.1:8080/api/payments \
@@ -220,16 +281,20 @@ POST /api/reconciliation/runs (auditor1)      -> "status":"MATCHED", "mismatchCo
 | ledger | `GET /api/ledger/accounts/{account}/balances`, `GET /api/ledger/trial-balance` | internal |
 | fraud | `POST /api/fraud-checks`, `PUT /api/chaos` `{failureRate, delayMs}` | internal |
 | mcp | `POST /mcp` (MCP, Streamable HTTP) | Bearer token with scopes |
+| analytics-mcp | `POST /mcp`, `GET /health` | Bearer token |
+| mcp-gateway | `POST/GET/DELETE /mcp`, `GET /health`, `GET /metrics` | Bearer token, per-client policy |
 
 Errors are RFC 9457 problem-detail JSON.
 
 ## Tests
 
 ```bash
-./mvnw verify            # all services
+./mvnw verify                                     # Java services
+cd analytics-mcp && pytest                        # Python
+cd mcp-gateway && npm run typecheck && npm test   # TypeScript
 ```
 
-93 tests, all run on every push by GitHub Actions. Integration tests start **real PostgreSQL 17 and Kafka 4.2 in Docker** (Testcontainers); external HTTP services are replaced by small stub servers so failures can be staged.
+129 tests, all run on every push by GitHub Actions. Integration tests start **real PostgreSQL 17 and Kafka 4.2 in Docker** (Testcontainers); external HTTP services are replaced by small stub servers so failures can be staged.
 
 | Service | Tests | Highlights |
 |---|---|---|
@@ -237,6 +302,8 @@ Errors are RFC 9457 problem-detail JSON.
 | ledger-service | 13 | Balanced debit/credit per payment; duplicate deliveries booked once; dead-letter topic; database refuses an unbalanced posting; ledger rows can't be updated or deleted |
 | fraud-service | 5 | Allow / review / deny rules, validation, chaos mode |
 | mcp-server | 22 | Driven by the official MCP Java client: tool list and safety hints, no approve tool, 401 without token, 403 for foreign origins, scopes, confirm/decline/no-elicitation paths, the 1,000 cap, untrusted text labelling, safe errors, append-only audit |
+| analytics-mcp | 19 | Driven in memory by the MCP Python client: exact decimal money, statement totals, the median-based outlier rule, input limits checked before any PayFlow call, 401 without a token, Host checks, safe errors |
+| mcp-gateway | 17 | Real MCP servers started inside the test, driven through the gateway by the official TypeScript client: policy filtering, per-client upstream identity, rate and argument limits, the confirmation relay (confirm, decline, unsupported client), redaction, quarantine of a poisoned or changed tool, audit tampering detected, session binding, an upstream outage |
 
 Measured locally (laptop, Docker with 8 CPUs, 10 concurrent curl clients, 200 payments): p50 120 ms and p95 194 ms per create; all 200 booked in the ledger about 1.3 s after the last request.
 
@@ -248,8 +315,10 @@ payflow/
   ledger-service/    Kafka consumer, double-entry ledger, outbox, read API
   fraud-service/     rule-based fraud check with a chaos switch for demos
   mcp-server/        MCP server for AI assistants: scoped tools, human confirmation, audit log
+  analytics-mcp/     Python MCP server: read-only ledger analytics
+  mcp-gateway/       TypeScript MCP gateway: policy, tool pinning, redaction, hash-chained audit
   observability/     Prometheus scrape config, Grafana data source + dashboard
-  Dockerfile         one multi-stage build for all services
+  Dockerfile         one multi-stage build for the Java services (the Python and Node projects have their own)
   docker-compose.yml infrastructure + optional "apps" and "observability" profiles
   demo.http          click-through demo
   AI_NOTES.md        how AI tools were used, and the design decisions
@@ -263,6 +332,10 @@ payflow/
 - Single Kafka broker and single database instances. No replication.
 - The outbox relay polls every 500 ms. Change-data-capture (Debezium) would cut latency at the cost of more infrastructure.
 - Account balances may go negative: overdraft and funds-availability rules are out of scope.
+- The gateway keeps its rate limits and sessions in memory, so it runs as one instance. Several instances would share them through Redis or similar.
+- Gateway client tokens are static demo tokens. Production would use OAuth 2.1, as the MCP authorization spec describes, with an identity provider.
+- The audit hash chain detects tampering but doesn't prevent it. Production would also ship records to write-once storage, or publish the latest hash elsewhere, so the whole file can't be rewritten.
+- The injection phrase scan is a heuristic. Pinning is the real control: nothing new or changed runs until a person approves it.
 
 ## License
 

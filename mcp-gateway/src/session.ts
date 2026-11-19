@@ -44,7 +44,8 @@ export function createSession(policy: ClientPolicy, deps: GatewayDeps): { server
       if (!upstream) throw new Error(`unknown upstream ${name}`);
       // Advertise elicitation upstream only if this person's client can actually show the question.
       const canAsk = server.getClientCapabilities()?.elicitation !== undefined;
-      client = connectUpstream(upstream, canAsk ? { elicitation: { form: {} } } : {}).then((c) => {
+      const tokenEnv = policy.upstreamTokenEnv?.[name] ?? upstream.tokenEnv;
+      client = connectUpstream(upstream, canAsk ? { elicitation: { form: {} } } : {}, tokenEnv).then((c) => {
         if (canAsk) {
           c.setRequestHandler(ElicitRequestSchema, async (request) => {
             deps.audit.write({ client: policy.name, event: 'call', tool: `${name}:elicitation`, decision: 'allow',

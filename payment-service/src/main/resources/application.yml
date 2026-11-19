@@ -59,6 +59,8 @@ payflow:
       - { username: auditor1, password: auditor1-pass, roles: [AUDITOR] }
       # Service account for mcp-server (AI clients). Never CHECKER, so it can never approve.
       - { username: mcp-agent, password: mcp-agent-pass, roles: [MAKER, AUDITOR] }
+      # Service account for analytics-mcp: read-only reporting, so AUDITOR only (it can't create or approve).
+      - { username: analytics-agent, password: analytics-agent-pass, roles: [AUDITOR] }
 
 management:
   endpoints:

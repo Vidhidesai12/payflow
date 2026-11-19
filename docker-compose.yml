@@ -1,7 +1,7 @@
 # Local environment. Everything runs on your machine, so it costs nothing.
 #
 #   docker compose up -d                                  infrastructure only (run the apps from your IDE / mvnw)
-#   docker compose --profile apps up -d --build           + the three services, built inside Docker
+#   docker compose --profile apps up -d --build           + the services and MCP servers, built inside Docker
 #   docker compose --profile apps --profile observability up -d --build   + Prometheus and Grafana
 #   docker compose down        stop        docker compose down -v        stop and wipe all data
 #
@@ -145,6 +145,44 @@ services:
     depends_on:
       mcp-db: { condition: service_healthy }
       payment-service: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8083/actuator/health || exit 1"]
+      interval: 5s
+      retries: 24
+
+  # Read-only analytics MCP server (Python). Reached through the gateway; 8084 is published for local testing.
+  analytics-mcp:
+    profiles: [apps]
+    build: ./analytics-mcp
+    ports:
+      - "8084:8084"
+    environment:
+      PAYFLOW_LEDGER_URL: http://ledger-service:8081
+      PAYFLOW_PAYMENTS_URL: http://payment-service:8080
+      ALLOWED_HOSTS: analytics-mcp:8084,127.0.0.1:8084,localhost:8084
+    depends_on:
+      ledger-service: { condition: service_started }
+      payment-service: { condition: service_started }
+
+  # Security gateway in front of both MCP servers (TypeScript). AI clients connect to :8085/mcp.
+  # It holds the upstream tokens itself; clients only ever see their own gateway token.
+  mcp-gateway:
+    profiles: [apps]
+    build: ./mcp-gateway
+    ports:
+      - "8085:8085"
+    environment:
+      UPSTREAM_PAYFLOW_URL: http://mcp-server:8083/mcp
+      UPSTREAM_ANALYTICS_URL: http://analytics-mcp:8084/mcp
+      UPSTREAM_PAYFLOW_TOKEN: payflow-demo-readonly
+      UPSTREAM_PAYFLOW_OPERATOR_TOKEN: payflow-demo-operator
+      UPSTREAM_ANALYTICS_TOKEN: analytics-demo-token
+      ALLOWED_HOSTS: 127.0.0.1:8085,localhost:8085,mcp-gateway:8085
+    volumes:
+      - gatewaydata:/data   # the hash-chained audit log survives restarts
+    depends_on:
+      mcp-server: { condition: service_healthy }
+      analytics-mcp: { condition: service_healthy }
 
   # ---- metrics (profile: observability) ------------------------------------------
 
@@ -175,3 +213,4 @@ volumes:
   ledgerdata:
   kafkadata:
   mcpdata:
+  gatewaydata:

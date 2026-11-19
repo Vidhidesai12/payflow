@@ -12,13 +12,14 @@ export type Register = (server: McpServer) => void;
  * `register` runs for every new session, so changing what it registers simulates a server that
  * changes its tools while the gateway is running.
  */
-export async function startUpstream(name: string, token: string, register: () => Register) {
+export async function startUpstream(name: string, tokens: string[], register: () => Register) {
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   const calls: string[] = [];
+  const callTokens: string[] = [];
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => {
-    if (req.headers.authorization !== `Bearer ${token}`) {
+    if (!tokens.some((t) => req.headers.authorization === `Bearer ${t}`)) {
       res.status(401).end();
       return;
     }
@@ -46,7 +47,10 @@ export async function startUpstream(name: string, token: string, register: () =>
     await transport.handleRequest(req, res, req.body);
   };
   app.post('/mcp', (req, res, next) => {
-    if (req.body?.method === 'tools/call') calls.push(req.body.params?.name);
+    if (req.body?.method === 'tools/call') {
+      calls.push(req.body.params?.name);
+      callTokens.push(String(req.headers.authorization).slice(7));
+    }
     next();
   }, handle);
   app.get('/mcp', handle);
@@ -58,5 +62,5 @@ export async function startUpstream(name: string, token: string, register: () =>
     listener.close(() => resolve());
     listener.closeAllConnections(); // keep-alive sockets would otherwise hold close() open
   });
-  return { url: `http://127.0.0.1:${port}/mcp`, calls, close };
+  return { url: `http://127.0.0.1:${port}/mcp`, calls, callTokens, close };
 }

@@ -1,0 +1,58 @@
+{
+  "port": 8085,
+  "allowedHosts": [
+    "127.0.0.1:8085",
+    "localhost:8085"
+  ],
+  "allowedOrigins": [],
+  "upstreams": [
+    {
+      "name": "payflow",
+      "url": "http://127.0.0.1:8083/mcp",
+      "tokenEnv": "UPSTREAM_PAYFLOW_TOKEN"
+    },
+    {
+      "name": "analytics",
+      "url": "http://127.0.0.1:8084/mcp",
+      "tokenEnv": "UPSTREAM_ANALYTICS_TOKEN"
+    }
+  ],
+  "clients": [
+    {
+      "name": "assistant-readonly",
+      "tokenSha256": "05a1c9ffe810b69964e42bc5735fa0faae77913bc6a9ebb1de59c85d38faf763",
+      "allowTools": [
+        "payflow__get_*",
+        "payflow__list_*",
+        "analytics__*"
+      ],
+      "denyTools": [],
+      "callsPerMinute": 30,
+      "argumentLimits": []
+    },
+    {
+      "name": "assistant-operator",
+      "tokenSha256": "3288a29e6c56d0b2538e6e43029a9ae2def7c0b04d2702ebd7dbdd530a2550e4",
+      "allowTools": [
+        "payflow__*",
+        "analytics__*"
+      ],
+      "denyTools": [],
+      "callsPerMinute": 20,
+      "argumentLimits": [
+        {
+          "tool": "payflow__create_payment",
+          "field": "amount",
+          "max": 500
+        }
+      ],
+      "upstreamTokenEnv": {
+        "payflow": "UPSTREAM_PAYFLOW_OPERATOR_TOKEN"
+      }
+    }
+  ],
+  "pinsFile": "pins.json",
+  "auditFile": "audit.jsonl",
+  "maxArgumentBytes": 4096,
+  "catalogRefreshSeconds": 60
+}
